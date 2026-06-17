@@ -4,7 +4,7 @@ import psycopg  # Modern psycopg3 driver
 from datetime import datetime
 from dotenv import load_dotenv  # Import the dotenv library
 
-# --- BULLETPROOF PATH FIX ---
+# PATH FIX 
 # 1. Get the exact folder where this hourly_pipeline.py file lives
 script_dir = os.path.dirname(os.path.abspath(__file__))
 # 2. Point directly to the .env file in that exact folder
@@ -24,7 +24,7 @@ if not db_pass:
 # Dynamic connection string using your hidden password variable
 DB_PARAMS = f"dbname=postgres user=postgres password={db_pass} host=127.0.0.1 port=5432"
 
-# The exact Open-Meteo link you generated
+# The exact Open-Meteo link
 API_URL = "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m&models=meteofrance_seamless&forecast_days=4"
 
 def run_hourly_pipeline():
@@ -50,7 +50,7 @@ def run_hourly_pipeline():
         coords = f"Lat: {payload.get('latitude')}, Lon: {payload.get('longitude')}"
         print(f"Found {len(timestamps)} hourly records to transform and load.")
 
-        # ---- LOAD LAYER (Using pure psycopg3 syntax) ----
+        #  LOAD LAYER
         print("Connecting to local PostgreSQL database...")
         with psycopg.connect(DB_PARAMS) as conn:
             with conn.cursor() as cur:
