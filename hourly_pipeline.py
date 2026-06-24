@@ -1,78 +1,79 @@
-import os  # Native Python library to talk to your operating system
 import requests
-import psycopg  # Modern psycopg3 driver
-from datetime import datetime
-from dotenv import load_dotenv  # Import the dotenv library
+import psycopg
+import json
+import os
+from dotenv import load_dotenv
 
-# PATH FIX 
-# 1. Get the exact folder where this hourly_pipeline.py file lives
+# Load environment variables (like DB_USER, DB_PASSWORD) from a .env file
+
+# --- ROBUST PATH RESOLUTION ---
+# This calculates the folder where this script lives
 script_dir = os.path.dirname(os.path.abspath(__file__))
-# 2. Point directly to the .env file in that exact folder
+# This creates a safe, OS-agnostic path to your .env file
 env_path = os.path.join(script_dir, '.env')
-# 3. Force-load it explicitly
+
+# Now load the environment variables using that specific path
 load_dotenv(dotenv_path=env_path)
-# ----------------------------
+# ---------------------------------------
 
-# Grab the secret password safely out of memory
-db_pass = os.getenv("DB_PASSWORD")
+DB_PASS = os.getenv("DB_PASSWORD")
+DB_USER = os.getenv("DB_USER")
 
-if not db_pass:
-    print(f"CRITICAL ERROR: Could not read DB_PASSWORD from the .env file.")
-    print(f"Looking for it at: {env_path}")
-    print("Please check your filename and formatting!")
-
-# Dynamic connection string using your hidden password variable
-DB_PARAMS = f"dbname=postgres user=postgres password={db_pass} host=127.0.0.1 port=5432"
-
-# The exact Open-Meteo link
-API_URL = "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m&models=meteofrance_seamless&forecast_days=4"
-
-def run_hourly_pipeline():
-    if not db_pass:
-        return
-        
+def run_pipeline():
+    """
+    Main pipeline function: Fetches weather data from an API 
+    and saves it to a PostgreSQL database.
+    """
     try:
-        print("Extracting hourly forecast data from Open-Meteo...")
-        response = requests.get(API_URL)
-        
-        if response.status_code != 200:
-            print(f"Failed to fetch data. Status: {response.status_code}")
-            return
-            
+        # 1. Acquire Data from Open-Meteo API
+        api_url = "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m"
+        response = requests.get(api_url)
         payload = response.json()
-        print("Extraction complete!")
 
-        # ---- TRANSFORM LAYER ----
-        hourly_data = payload.get("hourly", {})
-        timestamps = hourly_data.get("time", [])          
-        temperatures = hourly_data.get("temperature_2m", []) 
-        
-        coords = f"Lat: {payload.get('latitude')}, Lon: {payload.get('longitude')}"
-        print(f"Found {len(timestamps)} hourly records to transform and load.")
+        # Extract data lists from the JSON response
+        times = payload["hourly"]["time"]
+        temps = payload["hourly"]["temperature_2m"]
 
-        #  LOAD LAYER
-        print("Connecting to local PostgreSQL database...")
-        with psycopg.connect(DB_PARAMS) as conn:
-            with conn.cursor() as cur:
+        # 2. Database Connection Configuration
+        # Note: 127.0.0.1 refers to your local machine
+        conn_str = {
+                            "dbname": "postgres",
+                            "user": DB_USER,
+                            "password": DB_PASS,
+                            "host": "127.0.0.1",
+                            "port": "5432"
+                        }
+
+        # Using 'with' automatically closes the connection when finished
+        with psycopg.connect(**conn_str) as conn:
+            with conn.cursor() as cursor:
                 
-                # Clean old data out so you don't keep accumulating duplicates while testing
-                cur.execute("TRUNCATE TABLE public.hourly_weather;")
+                # Ensure the target table exists
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS va_bene (
+                        temperature FLOAT, 
+                        forecast_time TIMESTAMP
+                    )
+                """)
+
+                # WIPE the old data here
+                # This ensures every time the script runs, it starts fresh
+                cursor.execute("TRUNCATE TABLE va_bene;")
                 
-                for time_str, temp in zip(timestamps, temperatures):
-                    if time_str and temp is not None:
-                        parsed_time = datetime.fromisoformat(time_str)
-                        
-                        cur.execute("""
-                            INSERT INTO public.hourly_weather 
-                            (location_coords, forecast_time, temperature_2m)
-                            VALUES (%s, %s, %s);
-                        """, (coords, parsed_time, temp))
+                # Insert data rows one by one
+                for time_val, temp_val in zip(times, temps):
+                    cursor.execute("""
+                        INSERT INTO va_bene (temperature, forecast_time) 
+                        VALUES (%s, %s)
+                    """, (temp_val, time_val))
                 
+                # Commit saves the changes to the database
                 conn.commit()
-                print("All hourly records successfully loaded into your database using psycopg3!")
+                print("Values inserted successfully!")
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    except Exception as error:
+        # Catch and print any errors (like connection issues)
+        print(f"An error occurred: {error}")
 
 if __name__ == "__main__":
-    run_hourly_pipeline()
+    run_pipeline()
